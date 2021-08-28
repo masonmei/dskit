@@ -12,8 +12,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/cortexproject/cortex/pkg/util/test"
 )
 
 const (
@@ -204,7 +202,7 @@ func TestBasicLifecycler_HeartbeatWhileRunning(t *testing.T) {
 	desc, _ := getInstanceFromStore(t, store, testInstanceID)
 	initialTimestamp := desc.GetTimestamp()
 
-	test.Poll(t, time.Second, true, func() interface{} {
+	testutil.Poll(t, time.Second, true, func() interface{} {
 		desc, _ := getInstanceFromStore(t, store, testInstanceID)
 		currTimestamp := desc.GetTimestamp()
 
@@ -238,7 +236,7 @@ func TestBasicLifecycler_HeartbeatWhileStopping(t *testing.T) {
 		}))
 
 		// Wait until the timestamp has been updated.
-		test.Poll(t, time.Second, true, func() interface{} {
+		testutil.Poll(t, time.Second, true, func() interface{} {
 			desc, _ := getInstanceFromStore(t, store, testInstanceID)
 			currTimestamp := desc.GetTimestamp()
 
@@ -277,7 +275,7 @@ func TestBasicLifecycler_HeartbeatAfterBackendRest(t *testing.T) {
 		return NewDesc(), true, nil
 	}))
 
-	test.Poll(t, time.Second, true, func() interface{} {
+	testutil.Poll(t, time.Second, true, func() interface{} {
 		desc, ok := getInstanceFromStore(t, store, testInstanceID)
 		return ok &&
 			desc.GetTimestamp() > 0 &&
@@ -331,7 +329,7 @@ func TestBasicLifecycler_TokensObservePeriod(t *testing.T) {
 	// While the lifecycler is starting we poll the ring. As soon as the instance
 	// is registered, we remove some tokens to simulate how gossip memberlist
 	// reconciliation works in case of clashing tokens.
-	test.Poll(t, time.Second, true, func() interface{} {
+	testutil.Poll(t, time.Second, true, func() interface{} {
 		// Ensure the instance has been registered in the ring.
 		desc, ok := getInstanceFromStore(t, store, testInstanceID)
 		if !ok {

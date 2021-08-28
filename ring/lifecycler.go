@@ -9,18 +9,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	"github.com/grafana/dskit/flagext"
-	"github.com/grafana/dskit/kv"
-	"github.com/grafana/dskit/services"
 	"github.com/pkg/errors"
 	perrors "github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"go.uber.org/atomic"
 
-	"github.com/cortexproject/cortex/pkg/util"
-	"github.com/cortexproject/cortex/pkg/util/log"
+	"github.com/grafana/dskit/flagext"
+	"github.com/grafana/dskit/kv"
+	"github.com/grafana/dskit/netutil"
+	"github.com/grafana/dskit/services"
+	"github.com/grafana/dskit/timeutil"
 )
 
 var (
@@ -69,12 +69,12 @@ type LifecyclerConfig struct {
 }
 
 // RegisterFlags adds the flags required to config this to the given FlagSet
-func (cfg *LifecyclerConfig) RegisterFlags(f *flag.FlagSet) {
-	cfg.RegisterFlagsWithPrefix("", f)
+func (cfg *LifecyclerConfig) RegisterFlags(f *flag.FlagSet, logger log.Logger) {
+	cfg.RegisterFlagsWithPrefix("", f, logger)
 }
 
 // RegisterFlagsWithPrefix adds the flags required to config this to the given FlagSet.
-func (cfg *LifecyclerConfig) RegisterFlagsWithPrefix(prefix string, f *flag.FlagSet) {
+func (cfg *LifecyclerConfig) RegisterFlagsWithPrefix(prefix string, f *flag.FlagSet, logger log.Logger) {
 	cfg.RingConfig.RegisterFlagsWithPrefix(prefix, f)
 
 	// In order to keep backwards compatibility all of these need to be prefixed
@@ -93,7 +93,7 @@ func (cfg *LifecyclerConfig) RegisterFlagsWithPrefix(prefix string, f *flag.Flag
 
 	hostname, err := os.Hostname()
 	if err != nil {
-		level.Error(log.Logger).Log("msg", "failed to get hostname", "err", err)
+		level.Error(logger).Log("msg", "failed to get hostname", "err", err)
 		os.Exit(1)
 	}
 
@@ -141,18 +141,14 @@ type Lifecycler struct {
 }
 
 // NewLifecycler makes and starts a new Lifecycler.
-func NewLifecycler(cfg LifecyclerConfig, flushTransferer FlushTransferer, ringName, ringKey string) (*Lifecycler, error) {
+func NewLifecycler(cfg LifecyclerConfig, flushTransferer FlushTransferer, ringName, ringKey string, logger log.Logger, reg prometheus.Registerer) (*Lifecycler, error) {
 	addr := cfg.Addr
 	if addr == "" {
 		var err error
-		addr, err = util.GetFirstAddressOf(cfg.InfNames)
+		addr, err = netutil.GetFirstAddressOf(cfg.InfNames, logger)
 		if err != nil {
 			return nil, err
 		}
-	}
-	port := cfg.Port
-	if port == 0 {
-		port = *cfg.ListenPort
 	}
 	port := GetInstancePort(cfg.Port, cfg.ListenPort)
 	codec := GetCodec()
@@ -161,7 +157,7 @@ func NewLifecycler(cfg LifecyclerConfig, flushTransferer FlushTransferer, ringNa
 		cfg.RingConfig.KVStore,
 		codec,
 		kv.RegistererWithKVName(prometheus.WrapRegistererWithPrefix("cortex_", reg), ringName+"-lifecycler"),
-		log.Logger,
+		logger,
 	)
 	if err != nil {
 		return nil, err
@@ -169,7 +165,8 @@ func NewLifecycler(cfg LifecyclerConfig, flushTransferer FlushTransferer, ringNa
 
 	zone := cfg.Zone
 	if zone != "" {
-		log.WarnExperimentalUse("Zone aware replication")
+		// TODO
+		// logger.WarnExperimentalUse("Zone aware replication")
 	}
 
 	// We do allow a nil FlushTransferer, but to keep the ring logic easier we assume
@@ -206,7 +203,7 @@ func NewLifecycler(cfg LifecyclerConfig, flushTransferer FlushTransferer, ringNa
 // CheckReady is used to rate limit the number of ingesters that can be coming or
 // going at any one time, by only returning true if all ingesters are active.
 // The state latches: once we have gone ready we don't go un-ready
-func (i *Lifecycler) CheckReady(ctx context.Context) error {
+func (i *Lifecycler) CheckReady(ctx context.Context, logger log.Logger) error {
 	i.readyLock.Lock()
 	defer i.readyLock.Unlock()
 
@@ -222,7 +219,7 @@ func (i *Lifecycler) CheckReady(ctx context.Context) error {
 
 	desc, err := i.KVStore.Get(ctx, i.RingKey)
 	if err != nil {
-		level.Error(log.Logger).Log("msg", "error talking to the KV store", "ring", i.RingName, "err", err)
+		level.Error(logger).Log("msg", "error talking to the KV store", "ring", i.RingName, "err", err)
 		return fmt.Errorf("error talking to the KV store: %s", err)
 	}
 
@@ -236,7 +233,7 @@ func (i *Lifecycler) CheckReady(ctx context.Context) error {
 	}
 
 	if err := ringDesc.Ready(time.Now(), i.cfg.RingConfig.HeartbeatTimeout); err != nil {
-		level.Warn(log.Logger).Log("msg", "found an existing instance(s) with a problem in the ring, "+
+		level.Warn(logger).Log("msg", "found an existing instance(s) with a problem in the ring, "+
 			"this instance cannot become ready until this problem is resolved. "+
 			"The /ring http endpoint on the distributor (or single binary) provides visibility into the ring.",
 			"ring", i.RingName, "err", err)
@@ -293,7 +290,7 @@ func (i *Lifecycler) getTokens() Tokens {
 	return i.tokens
 }
 
-func (i *Lifecycler) setTokens(tokens Tokens) {
+func (i *Lifecycler) setTokens(tokens Tokens, logger log.Logger) {
 	tokensOwned.WithLabelValues(i.RingName).Set(float64(len(tokens)))
 
 	i.stateMtx.Lock()
@@ -302,7 +299,7 @@ func (i *Lifecycler) setTokens(tokens Tokens) {
 	i.tokens = tokens
 	if i.cfg.TokensFilePath != "" {
 		if err := i.tokens.StoreToFile(i.cfg.TokensFilePath); err != nil {
-			level.Error(log.Logger).Log("msg", "error storing tokens to disk", "path", i.cfg.TokensFilePath, "err", err)
+			level.Error(logger).Log("msg", "error storing tokens to disk", "path", i.cfg.TokensFilePath, "err", err)
 		}
 	}
 }
@@ -352,7 +349,7 @@ func (i *Lifecycler) ClaimTokensFor(ctx context.Context, ingesterID string) erro
 		}
 
 		if err := i.KVStore.CAS(ctx, i.RingKey, claimTokens); err != nil {
-			level.Error(log.Logger).Log("msg", "Failed to write to the KV store", "ring", i.RingName, "err", err)
+			level.Error(logger).Log("msg", "Failed to write to the KV store", "ring", i.RingName, "err", err)
 		}
 
 		i.setTokens(tokens)
@@ -394,17 +391,17 @@ func (i *Lifecycler) loop(ctx context.Context) error {
 	autoJoinAfter := time.After(i.cfg.JoinAfter)
 	var observeChan <-chan time.Time = nil
 
-	heartbeatTickerStop, heartbeatTickerChan := util.NewDisableableTicker(i.cfg.HeartbeatPeriod)
+	heartbeatTickerStop, heartbeatTickerChan := timeutil.NewDisableableTicker(i.cfg.HeartbeatPeriod)
 	defer heartbeatTickerStop()
 
 	for {
 		select {
 		case <-autoJoinAfter:
-			level.Debug(log.Logger).Log("msg", "JoinAfter expired", "ring", i.RingName)
+			level.Debug(logger).Log("msg", "JoinAfter expired", "ring", i.RingName)
 			// Will only fire once, after auto join timeout.  If we haven't entered "JOINING" state,
 			// then pick some tokens and enter ACTIVE state.
 			if i.GetState() == PENDING {
-				level.Info(log.Logger).Log("msg", "auto-joining cluster after timeout", "ring", i.RingName)
+				level.Info(logger).Log("msg", "auto-joining cluster after timeout", "ring", i.RingName)
 
 				if i.cfg.ObservePeriod > 0 {
 					// let's observe the ring. By using JOINING state, this ingester will be ignored by LEAVING
@@ -413,7 +410,7 @@ func (i *Lifecycler) loop(ctx context.Context) error {
 						return perrors.Wrapf(err, "failed to pick tokens in the KV store, ring: %s", i.RingName)
 					}
 
-					level.Info(log.Logger).Log("msg", "observing tokens before going ACTIVE", "ring", i.RingName)
+					level.Info(logger).Log("msg", "observing tokens before going ACTIVE", "ring", i.RingName)
 					observeChan = time.After(i.cfg.ObservePeriod)
 				} else {
 					if err := i.autoJoin(context.Background(), ACTIVE); err != nil {
@@ -428,18 +425,18 @@ func (i *Lifecycler) loop(ctx context.Context) error {
 
 			observeChan = nil
 			if s := i.GetState(); s != JOINING {
-				level.Error(log.Logger).Log("msg", "unexpected state while observing tokens", "state", s, "ring", i.RingName)
+				level.Error(logger).Log("msg", "unexpected state while observing tokens", "state", s, "ring", i.RingName)
 			}
 
 			if i.verifyTokens(context.Background()) {
-				level.Info(log.Logger).Log("msg", "token verification successful", "ring", i.RingName)
+				level.Info(logger).Log("msg", "token verification successful", "ring", i.RingName)
 
 				err := i.changeState(context.Background(), ACTIVE)
 				if err != nil {
-					level.Error(log.Logger).Log("msg", "failed to set state to ACTIVE", "ring", i.RingName, "err", err)
+					level.Error(logger).Log("msg", "failed to set state to ACTIVE", "ring", i.RingName, "err", err)
 				}
 			} else {
-				level.Info(log.Logger).Log("msg", "token verification failed, observing", "ring", i.RingName)
+				level.Info(logger).Log("msg", "token verification failed, observing", "ring", i.RingName)
 				// keep observing
 				observeChan = time.After(i.cfg.ObservePeriod)
 			}
@@ -447,14 +444,14 @@ func (i *Lifecycler) loop(ctx context.Context) error {
 		case <-heartbeatTickerChan:
 			consulHeartbeats.WithLabelValues(i.RingName).Inc()
 			if err := i.updateConsul(context.Background()); err != nil {
-				level.Error(log.Logger).Log("msg", "failed to write to the KV store, sleeping", "ring", i.RingName, "err", err)
+				level.Error(logger).Log("msg", "failed to write to the KV store, sleeping", "ring", i.RingName, "err", err)
 			}
 
 		case f := <-i.actorChan:
 			f()
 
 		case <-ctx.Done():
-			level.Info(log.Logger).Log("msg", "lifecycler loop() exited gracefully", "ring", i.RingName)
+			level.Info(logger).Log("msg", "lifecycler loop() exited gracefully", "ring", i.RingName)
 			return nil
 		}
 	}
@@ -471,13 +468,13 @@ func (i *Lifecycler) stopping(runningError error) error {
 		return nil
 	}
 
-	heartbeatTickerStop, heartbeatTickerChan := util.NewDisableableTicker(i.cfg.HeartbeatPeriod)
+	heartbeatTickerStop, heartbeatTickerChan := timeutil.NewDisableableTicker(i.cfg.HeartbeatPeriod)
 	defer heartbeatTickerStop()
 
 	// Mark ourselved as Leaving so no more samples are send to us.
 	err := i.changeState(context.Background(), LEAVING)
 	if err != nil {
-		level.Error(log.Logger).Log("msg", "failed to set state to LEAVING", "ring", i.RingName, "err", err)
+		level.Error(logger).Log("msg", "failed to set state to LEAVING", "ring", i.RingName, "err", err)
 	}
 
 	// Do the transferring / flushing on a background goroutine so we can continue
@@ -494,7 +491,7 @@ heartbeatLoop:
 		case <-heartbeatTickerChan:
 			consulHeartbeats.WithLabelValues(i.RingName).Inc()
 			if err := i.updateConsul(context.Background()); err != nil {
-				level.Error(log.Logger).Log("msg", "failed to write to the KV store, sleeping", "ring", i.RingName, "err", err)
+				level.Error(logger).Log("msg", "failed to write to the KV store, sleeping", "ring", i.RingName, "err", err)
 			}
 
 		case <-done:
@@ -506,7 +503,7 @@ heartbeatLoop:
 		if err := i.unregister(context.Background()); err != nil {
 			return perrors.Wrapf(err, "failed to unregister from the KV store, ring: %s", i.RingName)
 		}
-		level.Info(log.Logger).Log("msg", "instance removed from the KV store", "ring", i.RingName)
+		level.Info(logger).Log("msg", "instance removed from the KV store", "ring", i.RingName)
 	}
 
 	return nil
@@ -525,10 +522,10 @@ func (i *Lifecycler) initRing(ctx context.Context) error {
 	if i.cfg.TokensFilePath != "" {
 		tokensFromFile, err = LoadTokensFromFile(i.cfg.TokensFilePath)
 		if err != nil && !os.IsNotExist(err) {
-			level.Error(log.Logger).Log("msg", "error loading tokens from file", "err", err)
+			level.Error(logger).Log("msg", "error loading tokens from file", "err", err)
 		}
 	} else {
-		level.Info(log.Logger).Log("msg", "not loading tokens from file, tokens file path is empty")
+		level.Info(logger).Log("msg", "not loading tokens from file, tokens file path is empty")
 	}
 
 	err = i.KVStore.CAS(ctx, i.RingKey, func(in interface{}) (out interface{}, retry bool, err error) {
@@ -547,7 +544,7 @@ func (i *Lifecycler) initRing(ctx context.Context) error {
 
 			// We use the tokens from the file only if it does not exist in the ring yet.
 			if len(tokensFromFile) > 0 {
-				level.Info(log.Logger).Log("msg", "adding tokens from file", "num_tokens", len(tokensFromFile))
+				level.Info(logger).Log("msg", "adding tokens from file", "num_tokens", len(tokensFromFile))
 				if len(tokensFromFile) >= i.cfg.NumTokens {
 					i.setState(ACTIVE)
 				}
@@ -557,7 +554,7 @@ func (i *Lifecycler) initRing(ctx context.Context) error {
 			}
 
 			// Either we are a new ingester, or consul must have restarted
-			level.Info(log.Logger).Log("msg", "instance not found in ring, adding with no tokens", "ring", i.RingName)
+			level.Info(logger).Log("msg", "instance not found in ring, adding with no tokens", "ring", i.RingName)
 			ringDesc.AddIngester(i.ID, i.Addr, i.Zone, []uint32{}, i.GetState(), registeredAt)
 			return ringDesc, true, nil
 		}
@@ -571,7 +568,7 @@ func (i *Lifecycler) initRing(ctx context.Context) error {
 		// to set it back to PENDING in order to start the lifecycle from the
 		// beginning.
 		if instanceDesc.State == JOINING {
-			level.Warn(log.Logger).Log("msg", "instance found in ring as JOINING, setting to PENDING",
+			level.Warn(logger).Log("msg", "instance found in ring as JOINING, setting to PENDING",
 				"ring", i.RingName)
 			instanceDesc.State = PENDING
 			return ringDesc, true, nil
@@ -589,7 +586,7 @@ func (i *Lifecycler) initRing(ctx context.Context) error {
 		tokens, _ := ringDesc.TokensFor(i.ID)
 		i.setTokens(tokens)
 
-		level.Info(log.Logger).Log("msg", "existing entry found in ring", "state", i.GetState(), "tokens", len(tokens), "ring", i.RingName)
+		level.Info(logger).Log("msg", "existing entry found in ring", "state", i.GetState(), "tokens", len(tokens), "ring", i.RingName)
 
 		// Update the ring if the instance has been changed and the heartbeat is disabled.
 		// We dont need to update KV here when heartbeat is enabled as this info will eventually be update on KV
@@ -634,7 +631,7 @@ func (i *Lifecycler) verifyTokens(ctx context.Context) bool {
 			// uh, oh... our tokens are not our anymore. Let's try new ones.
 			needTokens := i.cfg.NumTokens - len(ringTokens)
 
-			level.Info(log.Logger).Log("msg", "generating new tokens", "count", needTokens, "ring", i.RingName)
+			level.Info(logger).Log("msg", "generating new tokens", "count", needTokens, "ring", i.RingName)
 			newTokens := GenerateTokens(needTokens, takenTokens)
 
 			ringTokens = append(ringTokens, newTokens...)
@@ -653,7 +650,7 @@ func (i *Lifecycler) verifyTokens(ctx context.Context) bool {
 	})
 
 	if err != nil {
-		level.Error(log.Logger).Log("msg", "failed to verify tokens", "ring", i.RingName, "err", err)
+		level.Error(logger).Log("msg", "failed to verify tokens", "ring", i.RingName, "err", err)
 		return false
 	}
 
@@ -692,7 +689,7 @@ func (i *Lifecycler) autoJoin(ctx context.Context, targetState InstanceState) er
 		// At this point, we should not have any tokens, and we should be in PENDING state.
 		myTokens, takenTokens := ringDesc.TokensFor(i.ID)
 		if len(myTokens) > 0 {
-			level.Error(log.Logger).Log("msg", "tokens already exist for this instance - wasn't expecting any!", "num_tokens", len(myTokens), "ring", i.RingName)
+			level.Error(logger).Log("msg", "tokens already exist for this instance - wasn't expecting any!", "num_tokens", len(myTokens), "ring", i.RingName)
 		}
 
 		newTokens := GenerateTokens(i.cfg.NumTokens-len(myTokens), takenTokens)
@@ -730,7 +727,7 @@ func (i *Lifecycler) updateConsul(ctx context.Context) error {
 		instanceDesc, ok := ringDesc.Ingesters[i.ID]
 		if !ok {
 			// consul must have restarted
-			level.Info(log.Logger).Log("msg", "found empty ring, inserting tokens", "ring", i.RingName)
+			level.Info(logger).Log("msg", "found empty ring, inserting tokens", "ring", i.RingName)
 			ringDesc.AddIngester(i.ID, i.Addr, i.Zone, i.getTokens(), i.GetState(), i.getRegisteredAt())
 		} else {
 			instanceDesc.Timestamp = time.Now().Unix()
@@ -765,7 +762,7 @@ func (i *Lifecycler) changeState(ctx context.Context, state InstanceState) error
 		return fmt.Errorf("Changing instance state from %v -> %v is disallowed", currState, state)
 	}
 
-	level.Info(log.Logger).Log("msg", "changing instance state from", "old_state", currState, "new_state", state, "ring", i.RingName)
+	level.Info(logger).Log("msg", "changing instance state from", "old_state", currState, "new_state", state, "ring", i.RingName)
 	i.setState(state)
 	return i.updateConsul(ctx)
 }
@@ -820,9 +817,9 @@ func (i *Lifecycler) processShutdown(ctx context.Context) {
 	transferStart := time.Now()
 	if err := i.flushTransferer.TransferOut(ctx); err != nil {
 		if err == ErrTransferDisabled {
-			level.Info(log.Logger).Log("msg", "transfers are disabled")
+			level.Info(logger).Log("msg", "transfers are disabled")
 		} else {
-			level.Error(log.Logger).Log("msg", "failed to transfer chunks to another instance", "ring", i.RingName, "err", err)
+			level.Error(logger).Log("msg", "failed to transfer chunks to another instance", "ring", i.RingName, "err", err)
 			shutdownDuration.WithLabelValues("transfer", "fail", i.RingName).Observe(time.Since(transferStart).Seconds())
 		}
 	} else {
@@ -842,7 +839,7 @@ func (i *Lifecycler) processShutdown(ctx context.Context) {
 
 // unregister removes our entry from consul.
 func (i *Lifecycler) unregister(ctx context.Context) error {
-	level.Debug(log.Logger).Log("msg", "unregistering instance from ring", "ring", i.RingName)
+	level.Debug(logger).Log("msg", "unregistering instance from ring", "ring", i.RingName)
 
 	return i.KVStore.CAS(ctx, i.RingKey, func(in interface{}) (out interface{}, retry bool, err error) {
 		if in == nil {

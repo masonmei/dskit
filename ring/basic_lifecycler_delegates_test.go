@@ -12,9 +12,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/cortexproject/cortex/pkg/util/concurrency"
-	"github.com/cortexproject/cortex/pkg/util/test"
 )
 
 func TestLeaveOnStoppingDelegate(t *testing.T) {
@@ -52,7 +49,7 @@ func TestTokensPersistencyDelegate_ShouldSkipTokensLoadingIfFileDoesNotExist(t *
 		},
 	}
 
-	logs := &concurrency.SyncBuffer{}
+	logs := &syncBuffer{}
 	logger := log.NewLogfmtLogger(logs)
 	persistencyDelegate := NewTokensPersistencyDelegate(tokensFile.Name(), ACTIVE, testDelegate, logger)
 
@@ -288,7 +285,7 @@ func TestAutoForgetDelegate(t *testing.T) {
 			defer services.StopAndAwaitTerminated(ctx, lifecycler) //nolint:errcheck
 
 			// Wait until an heartbeat has been sent.
-			test.Poll(t, time.Second, true, func() interface{} {
+			testutil.Poll(t, time.Second, true, func() interface{} {
 				return testutil.ToFloat64(lifecycler.metrics.heartbeats) > 0
 			})
 

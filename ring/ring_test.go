@@ -16,11 +16,10 @@ import (
 	"github.com/grafana/dskit/kv"
 	"github.com/grafana/dskit/kv/consul"
 	"github.com/grafana/dskit/services"
+	"github.com/grafana/dskit/stringutil"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/cortexproject/cortex/pkg/util"
-	"github.com/cortexproject/cortex/pkg/util/test"
 )
 
 const (
@@ -1108,7 +1107,7 @@ func TestRing_ShuffleShard_Shuffling(t *testing.T) {
 
 			numMatching := 0
 			for _, c := range currShard {
-				if util.StringsContain(otherShard, c) {
+				if stringutil.StringsContain(otherShard, c) {
 					numMatching++
 				}
 			}
@@ -1946,17 +1945,17 @@ func TestRingUpdates(t *testing.T) {
 	require.Equal(t, 0, ring.InstancesCount())
 
 	lc1 := startLifecycler(t, cfg, 100*time.Millisecond, 1, 3)
-	test.Poll(t, 1*time.Second, 1, func() interface{} {
+	testutil.Poll(t, 1*time.Second, 1, func() interface{} {
 		return ring.InstancesCount()
 	})
 
 	lc2 := startLifecycler(t, cfg, 100*time.Millisecond, 2, 3)
-	test.Poll(t, 1*time.Second, 2, func() interface{} {
+	testutil.Poll(t, 1*time.Second, 2, func() interface{} {
 		return ring.InstancesCount()
 	})
 
 	lc3 := startLifecycler(t, cfg, 100*time.Millisecond, 3, 3)
-	test.Poll(t, 1*time.Second, 3, func() interface{} {
+	testutil.Poll(t, 1*time.Second, 3, func() interface{} {
 		return ring.InstancesCount()
 	})
 
@@ -1973,17 +1972,17 @@ func TestRingUpdates(t *testing.T) {
 	}
 
 	require.NoError(t, services.StopAndAwaitTerminated(context.Background(), lc2))
-	test.Poll(t, 1*time.Second, 2, func() interface{} {
+	testutil.Poll(t, 1*time.Second, 2, func() interface{} {
 		return ring.InstancesCount()
 	})
 
 	require.NoError(t, services.StopAndAwaitTerminated(context.Background(), lc1))
-	test.Poll(t, 1*time.Second, 1, func() interface{} {
+	testutil.Poll(t, 1*time.Second, 1, func() interface{} {
 		return ring.InstancesCount()
 	})
 
 	require.NoError(t, services.StopAndAwaitTerminated(context.Background(), lc3))
-	test.Poll(t, 1*time.Second, 0, func() interface{} {
+	testutil.Poll(t, 1*time.Second, 0, func() interface{} {
 		return ring.InstancesCount()
 	})
 }
@@ -2053,7 +2052,7 @@ func TestShuffleShardWithCaching(t *testing.T) {
 	}
 
 	// Wait until all instances in the ring are ACTIVE.
-	test.Poll(t, 5*time.Second, numLifecyclers, func() interface{} {
+	testutil.Poll(t, 5*time.Second, numLifecyclers, func() interface{} {
 		active := 0
 		rs, _ := ring.GetReplicationSetForOperation(Read)
 		for _, ing := range rs.Instances {
@@ -2098,7 +2097,7 @@ func TestShuffleShardWithCaching(t *testing.T) {
 		require.NoError(t, services.StopAndAwaitTerminated(context.Background(), lcs[i]))
 	}
 
-	test.Poll(t, 5*time.Second, numLifecyclers-zones, func() interface{} {
+	testutil.Poll(t, 5*time.Second, numLifecyclers-zones, func() interface{} {
 		return ring.InstancesCount()
 	})
 
@@ -2127,7 +2126,7 @@ func TestShuffleShardWithCaching(t *testing.T) {
 
 // User shuffle shard token.
 func userToken(user, zone string, skip int) uint32 {
-	r := rand.New(rand.NewSource(util.ShuffleShardSeed(user, zone)))
+	r := rand.New(rand.NewSource(shuffleShardSeed(user, zone)))
 
 	for ; skip > 0; skip-- {
 		_ = r.Uint32()

@@ -7,12 +7,11 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	strings "strings"
 	"time"
 
+	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-
-	"github.com/cortexproject/cortex/pkg/util"
-	"github.com/cortexproject/cortex/pkg/util/log"
 )
 
 const pageContent = `
@@ -104,11 +103,11 @@ func (r *Ring) forget(ctx context.Context, id string) error {
 	return r.KVClient.CAS(ctx, r.key, unregister)
 }
 
-func (r *Ring) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (r *Ring) ServeHTTP(w http.ResponseWriter, req *http.Request, logger log.Logger) {
 	if req.Method == http.MethodPost {
 		ingesterID := req.FormValue("forget")
 		if err := r.forget(req.Context(), ingesterID); err != nil {
-			level.Error(log.WithContext(req.Context(), log.Logger)).Log("msg", "error forgetting instance", "err", err)
+			level.Error(logger.WithContext(req.Context())).Log("msg", "error forgetting instance", "err", err)
 		}
 
 		// Implement PRG pattern to prevent double-POST and work with CSRF middleware.
@@ -174,7 +173,7 @@ func (r *Ring) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	tokensParam := req.URL.Query().Get("tokens")
 
-	util.RenderHTTPResponse(w, struct {
+	renderHTTPResponse(w, struct {
 		Ingesters  []interface{} `json:"shards"`
 		Now        time.Time     `json:"now"`
 		ShowTokens bool          `json:"-"`
@@ -183,4 +182,19 @@ func (r *Ring) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		Now:        now,
 		ShowTokens: tokensParam == "true",
 	}, pageTemplate, req)
+}
+
+// renderHTTPResponse either responds with json or a rendered html page using the passed in template
+// by checking the Accepts header
+func renderHTTPResponse(w http.ResponseWriter, v interface{}, t *template.Template, r *http.Request) {
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "application/json") {
+		WriteJSONResponse(w, v)
+		return
+	}
+
+	err := t.Execute(w, v)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

@@ -10,12 +10,10 @@ import (
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/grafana/dskit/services"
+	"github.com/grafana/dskit/stringutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/weaveworks/common/user"
 	"google.golang.org/grpc/health/grpc_health_v1"
-
-	"github.com/cortexproject/cortex/pkg/util"
-	util_log "github.com/cortexproject/cortex/pkg/util/log"
 )
 
 // PoolClient is the interface that should be implemented by a
@@ -117,7 +115,7 @@ func (p *Pool) GetClientFor(addr string) (PoolClient, error) {
 }
 
 // RemoveClientFor removes the client with the specified address
-func (p *Pool) RemoveClientFor(addr string) {
+func (p *Pool) RemoveClientFor(addr string, logger log.Logger) {
 	p.Lock()
 	defer p.Unlock()
 	client, ok := p.clients[addr]
@@ -153,7 +151,7 @@ func (p *Pool) Count() int {
 	return len(p.clients)
 }
 
-func (p *Pool) removeStaleClients() {
+func (p *Pool) removeStaleClients(logger log.Logger) {
 	// Only if service discovery has been configured.
 	if p.discovery == nil {
 		return
@@ -161,28 +159,28 @@ func (p *Pool) removeStaleClients() {
 
 	serviceAddrs, err := p.discovery()
 	if err != nil {
-		level.Error(util_log.Logger).Log("msg", "error removing stale clients", "err", err)
+		level.Error(logger).Log("msg", "error removing stale clients", "err", err)
 		return
 	}
 
 	for _, addr := range p.RegisteredAddresses() {
-		if util.StringsContain(serviceAddrs, addr) {
+		if stringutil.StringsContain(serviceAddrs, addr) {
 			continue
 		}
-		level.Info(util_log.Logger).Log("msg", "removing stale client", "addr", addr)
+		level.Info(logger).Log("msg", "removing stale client", "addr", addr)
 		p.RemoveClientFor(addr)
 	}
 }
 
 // cleanUnhealthy loops through all servers and deletes any that fails a healthcheck.
-func (p *Pool) cleanUnhealthy() {
+func (p *Pool) cleanUnhealthy(logger log.Logger) {
 	for _, addr := range p.RegisteredAddresses() {
 		client, ok := p.fromCache(addr)
 		// not ok means someone removed a client between the start of this loop and now
 		if ok {
 			err := healthCheck(client, p.cfg.HealthCheckTimeout)
 			if err != nil {
-				level.Warn(util_log.Logger).Log("msg", fmt.Sprintf("removing %s failing healthcheck", p.clientName), "addr", addr, "reason", err)
+				level.Warn(logger).Log("msg", fmt.Sprintf("removing %s failing healthcheck", p.clientName), "addr", addr, "reason", err)
 				p.RemoveClientFor(addr)
 			}
 		}

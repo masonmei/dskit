@@ -13,10 +13,9 @@ import (
 	"github.com/grafana/dskit/flagext"
 	"github.com/grafana/dskit/kv/consul"
 	"github.com/grafana/dskit/services"
+	"github.com/grafana/dskit/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/cortexproject/cortex/pkg/util/test"
 )
 
 func testLifecyclerConfig(ringConfig Config, id string) LifecyclerConfig {
@@ -80,7 +79,7 @@ func TestRingNormaliseMigration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Check this ingester joined, is active, and has one token.
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 		require.NoError(t, err)
 		return checkDenormalisedLeaving(d, "ing1")
@@ -100,7 +99,7 @@ func TestRingNormaliseMigration(t *testing.T) {
 	require.NoError(t, l2.ChangeState(context.Background(), ACTIVE))
 
 	// Check the new ingester joined, has the same token, and is active.
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 		require.NoError(t, err)
 
@@ -137,7 +136,7 @@ func TestLifecycler_HealthyInstancesCount(t *testing.T) {
 	defer services.StopAndAwaitTerminated(ctx, lifecycler1) // nolint:errcheck
 
 	// Assert the first ingester joined the ring
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		return lifecycler1.HealthyInstancesCount() == 1
 	})
 
@@ -154,12 +153,12 @@ func TestLifecycler_HealthyInstancesCount(t *testing.T) {
 	defer services.StopAndAwaitTerminated(ctx, lifecycler2) // nolint:errcheck
 
 	// Assert the second ingester joined the ring
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		return lifecycler2.HealthyInstancesCount() == 2
 	})
 
 	// Assert the first ingester count is updated
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		return lifecycler1.HealthyInstancesCount() == 2
 	})
 }
@@ -199,7 +198,7 @@ func TestLifecycler_ZonesCount(t *testing.T) {
 		defer services.StopAndAwaitTerminated(ctx, lifecycler) // nolint:errcheck
 
 		// Wait until joined.
-		test.Poll(t, time.Second, idx+1, func() interface{} {
+		testutil.Poll(t, time.Second, idx+1, func() interface{} {
 			return lifecycler.HealthyInstancesCount()
 		})
 
@@ -222,7 +221,7 @@ func TestLifecycler_NilFlushTransferer(t *testing.T) {
 	require.NoError(t, services.StartAndAwaitRunning(context.Background(), lifecycler))
 
 	// Ensure the lifecycler joined the ring
-	test.Poll(t, time.Second, 1, func() interface{} {
+	testutil.Poll(t, time.Second, 1, func() interface{} {
 		return lifecycler.HealthyInstancesCount()
 	})
 
@@ -256,11 +255,11 @@ func TestLifecycler_TwoRingsWithDifferentKeysOnTheSameKVStore(t *testing.T) {
 
 	// Ensure each lifecycler reports 1 healthy instance, because they're
 	// in a different ring
-	test.Poll(t, time.Second, 1, func() interface{} {
+	testutil.Poll(t, time.Second, 1, func() interface{} {
 		return lifecycler1.HealthyInstancesCount()
 	})
 
-	test.Poll(t, time.Second, 1, func() interface{} {
+	testutil.Poll(t, time.Second, 1, func() interface{} {
 		return lifecycler2.HealthyInstancesCount()
 	})
 }
@@ -292,7 +291,7 @@ func TestLifecycler_ShouldHandleInstanceAbruptlyRestarted(t *testing.T) {
 	require.NoError(t, services.StartAndAwaitRunning(context.Background(), l1))
 
 	// Check this ingester joined, is active, and has one token.
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 		require.NoError(t, err)
 		return checkNormalised(d, "ing1")
@@ -311,7 +310,7 @@ func TestLifecycler_ShouldHandleInstanceAbruptlyRestarted(t *testing.T) {
 	require.NoError(t, services.StartAndAwaitRunning(context.Background(), l2))
 
 	// Check the new ingester picked up the same tokens and registered timestamp.
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 		require.NoError(t, err)
 
@@ -423,7 +422,7 @@ func TestRestartIngester_DisabledHeartbeat_unregister_on_shutdown_false(t *testi
 	// poll function waits for a condition and returning actual state of the ingesters after the condition succeed.
 	poll := func(condition func(*Desc) bool) map[string]InstanceDesc {
 		var ingesters map[string]InstanceDesc
-		test.Poll(t, 5*time.Second, true, func() interface{} {
+		testutil.Poll(t, 5*time.Second, true, func() interface{} {
 			d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 			require.NoError(t, err)
 
@@ -541,7 +540,7 @@ func TestTokensOnDisk(t *testing.T) {
 
 	// Check this ingester joined, is active, and has 512 token.
 	var expTokens []uint32
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 		require.NoError(t, err)
 
@@ -566,7 +565,7 @@ func TestTokensOnDisk(t *testing.T) {
 
 	// Check this ingester joined, is active, and has 512 token.
 	var actTokens []uint32
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 		require.NoError(t, err)
 		desc, ok := d.(*Desc)
@@ -629,7 +628,7 @@ func TestJoinInLeavingState(t *testing.T) {
 	require.NoError(t, services.StartAndAwaitRunning(context.Background(), l1))
 
 	// Check that the lifecycler was able to join after coming up in LEAVING
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 		require.NoError(t, err)
 
@@ -687,7 +686,7 @@ func TestJoinInJoiningState(t *testing.T) {
 	require.NoError(t, services.StartAndAwaitRunning(context.Background(), l1))
 
 	// Check that the lifecycler was able to join after coming up in JOINING
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 		require.NoError(t, err)
 
@@ -746,7 +745,7 @@ func TestRestoreOfZoneWhenOverwritten(t *testing.T) {
 	require.NoError(t, services.StartAndAwaitRunning(context.Background(), l1))
 
 	// Check that the lifecycler was able to reset the zone value to the expected setting
-	test.Poll(t, 1000*time.Millisecond, true, func() interface{} {
+	testutil.Poll(t, 1000*time.Millisecond, true, func() interface{} {
 		d, err := r.KVClient.Get(context.Background(), IngesterRingKey)
 		require.NoError(t, err)
 		desc, ok := d.(*Desc)

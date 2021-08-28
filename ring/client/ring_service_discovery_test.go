@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/cortexproject/cortex/pkg/ring"
+	"github.com/grafana/dskit/ring"
 )
 
 func TestNewRingServiceDiscovery(t *testing.T) {

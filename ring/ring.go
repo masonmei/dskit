@@ -11,15 +11,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/grafana/dskit/kv"
 	"github.com/grafana/dskit/services"
+	"github.com/grafana/dskit/stringutil"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/cortexproject/cortex/pkg/util"
-	"github.com/cortexproject/cortex/pkg/util/log"
-	util_math "github.com/cortexproject/cortex/pkg/util/math"
 )
 
 const (
@@ -207,7 +205,7 @@ func New(cfg Config, name, key string, reg prometheus.Registerer) (*Ring, error)
 		cfg.KVStore,
 		codec,
 		kv.RegistererWithKVName(prometheus.WrapRegistererWithPrefix("cortex_", reg), name+"-ring"),
-		log.Logger,
+		logger,
 	)
 	if err != nil {
 		return nil, err
@@ -264,7 +262,7 @@ func NewWithStoreClientAndStrategy(cfg Config, name, key string, store kv.Client
 	return r, nil
 }
 
-func (r *Ring) starting(ctx context.Context) error {
+func (r *Ring) starting(ctx context.Context, logger log.Logger) error {
 	// Get the initial ring state so that, as soon as the service will be running, the in-memory
 	// ring would be already populated and there's no race condition between when the service is
 	// running and the WatchKey() callback is called for the first time.
@@ -273,7 +271,7 @@ func (r *Ring) starting(ctx context.Context) error {
 		return errors.Wrap(err, "unable to initialise ring state")
 	}
 	if value == nil {
-		level.Info(log.Logger).Log("msg", "ring doesn't exist in KV store yet")
+		level.Info(logger).Log("msg", "ring doesn't exist in KV store yet")
 		return nil
 	}
 
@@ -281,10 +279,10 @@ func (r *Ring) starting(ctx context.Context) error {
 	return nil
 }
 
-func (r *Ring) loop(ctx context.Context) error {
+func (r *Ring) loop(ctx context.Context, logger log.Logger) error {
 	r.KVClient.WatchKey(ctx, r.key, func(value interface{}) bool {
 		if value == nil {
-			level.Info(log.Logger).Log("msg", "ring doesn't exist in KV store yet")
+			level.Info(logger).Log("msg", "ring doesn't exist in KV store yet")
 			return true
 		}
 
@@ -362,13 +360,13 @@ func (r *Ring) Get(key uint32, op Operation, bufDescs []InstanceDesc, bufHosts, 
 		}
 
 		// We want n *distinct* instances && distinct zones.
-		if util.StringsContain(distinctHosts, info.InstanceID) {
+		if stringutil.StringsContain(distinctHosts, info.InstanceID) {
 			continue
 		}
 
 		// Ignore if the instances don't have a zone set.
 		if r.cfg.ZoneAwarenessEnabled && info.Zone != "" {
-			if util.StringsContain(distinctZones, info.Zone) {
+			if stringutil.StringsContain(distinctZones, info.Zone) {
 				continue
 			}
 		}
@@ -454,7 +452,10 @@ func (r *Ring) GetReplicationSetForOperation(op Operation) (ReplicationSet, erro
 		// Given data is replicated to RF different zones, we can tolerate a number of
 		// RF/2 failing zones. However, we need to protect from the case the ring currently
 		// contains instances in a number of zones < RF.
-		numReplicatedZones := util_math.Min(len(r.ringZones), r.cfg.ReplicationFactor)
+		numReplicatedZones := len(r.ringZones)
+		if r.cfg.ReplicationFactor < numReplicatedZones {
+			numReplicatedZones = r.cfg.ReplicationFactor
+		}
 		minSuccessZones := (numReplicatedZones / 2) + 1
 		maxUnavailableZones = minSuccessZones - 1
 
@@ -671,7 +672,7 @@ func (r *Ring) shuffleShard(identifier string, size int, lookbackPeriod time.Dur
 	var actualZones []string
 
 	if r.cfg.ZoneAwarenessEnabled {
-		numInstancesPerZone = util.ShuffleShardExpectedInstancesPerZone(size, len(r.ringZones))
+		numInstancesPerZone = shuffleShardExpectedInstancesPerZone(size, len(r.ringZones))
 		actualZones = r.ringZones
 	} else {
 		numInstancesPerZone = size
@@ -696,7 +697,7 @@ func (r *Ring) shuffleShard(identifier string, size int, lookbackPeriod time.Dur
 		// Since we consider each zone like an independent ring, we have to use dedicated
 		// pseudo-random generator for each zone, in order to guarantee the "consistency"
 		// property when the shard size changes or a new zone is added.
-		random := rand.New(rand.NewSource(util.ShuffleShardSeed(identifier, zone)))
+		random := rand.New(rand.NewSource(shuffleShardSeed(identifier, zone)))
 
 		// To select one more instance while guaranteeing the "consistency" property,
 		// we do pick a random value from the generator and resolve uniqueness collisions

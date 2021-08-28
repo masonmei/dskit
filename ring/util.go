@@ -7,8 +7,7 @@ import (
 	"time"
 
 	"github.com/grafana/dskit/backoff"
-
-	"github.com/cortexproject/cortex/pkg/util"
+	"github.com/grafana/dskit/netutil"
 )
 
 // GenerateTokens make numTokens unique random tokens, none of which clash
@@ -51,7 +50,7 @@ func GetInstanceAddr(configAddr string, netInterfaces []string) (string, error) 
 		return configAddr, nil
 	}
 
-	addr, err := util.GetFirstAddressOf(netInterfaces)
+	addr, err := netutil.GetFirstAddressOf(netInterfaces, logger)
 	if err != nil {
 		return "", err
 	}
