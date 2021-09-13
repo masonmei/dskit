@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 )
 
@@ -28,18 +29,22 @@ var (
 
 // NewDNSResolverWithFreq creates a DNS Resolver that can resolve DNS names, and
 // create watchers that poll the DNS server using the frequency set by freq.
-func NewDNSResolverWithFreq(freq time.Duration) (Resolver, error) {
-	return &dnsResolver{freq: freq}, nil
+func NewDNSResolverWithFreq(freq time.Duration, logger log.Logger) (Resolver, error) {
+	return &dnsResolver{
+		logger: logger,
+		freq:   freq,
+	}, nil
 }
 
 // NewDNSResolver creates a DNS Resolver that can resolve DNS names, and create
 // watchers that poll the DNS server using the default frequency defined by defaultFreq.
-func NewDNSResolver() (Resolver, error) {
-	return NewDNSResolverWithFreq(defaultFreq)
+func NewDNSResolver(logger log.Logger) (Resolver, error) {
+	return NewDNSResolverWithFreq(defaultFreq, logger)
 }
 
 // dnsResolver handles name resolution for names following the DNS scheme
 type dnsResolver struct {
+	logger log.Logger
 	// frequency of polling the DNS server that the watchers created by this resolver will use.
 	freq time.Duration
 }
@@ -115,6 +120,7 @@ func (r *dnsResolver) Resolve(target string) (Watcher, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &dnsWatcher{
 		r:      r,
+		logger: r.logger,
 		host:   host,
 		port:   port,
 		ctx:    ctx,
@@ -125,9 +131,10 @@ func (r *dnsResolver) Resolve(target string) (Watcher, error) {
 
 // dnsWatcher watches for the name resolution update for a specific target
 type dnsWatcher struct {
-	r    *dnsResolver
-	host string
-	port string
+	r      *dnsResolver
+	logger log.Logger
+	host   string
+	port   string
 	// The latest resolved address set
 	curAddrs map[string]*Update
 	ctx      context.Context
@@ -205,7 +212,7 @@ func (w *dnsWatcher) lookupSRV() map[string]*Update {
 	for _, s := range srvs {
 		lbAddrs, err := lookupHost(w.ctx, s.Target)
 		if err != nil {
-			level.Warning(w.logger).Log("msg", "failed load balancer address DNS lookup", "err", err)
+			level.Warn(w.logger).Log("msg", "failed load balancer address DNS lookup", "err", err)
 			continue
 		}
 		for _, a := range lbAddrs {
