@@ -12,7 +12,6 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/grafana/dskit/backoff"
-
 	"github.com/grafana/dskit/crypto/tls"
 	"github.com/grafana/dskit/grpcencoding/snappy"
 )

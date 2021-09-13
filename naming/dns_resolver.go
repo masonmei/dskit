@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"google.golang.org/grpc/grpclog"
+	"github.com/go-kit/kit/log/level"
 )
 
 const (
@@ -199,19 +199,19 @@ func (w *dnsWatcher) lookupSRV() map[string]*Update {
 	newAddrs := make(map[string]*Update)
 	_, srvs, err := lookupSRV(w.ctx, "grpclb", "tcp", w.host)
 	if err != nil {
-		grpclog.Infof("grpc: failed dns SRV record lookup due to %v.\n", err)
+		level.Info(w.logger).Log("msg", "failed DNS SRV record lookup", "err", err)
 		return nil
 	}
 	for _, s := range srvs {
 		lbAddrs, err := lookupHost(w.ctx, s.Target)
 		if err != nil {
-			grpclog.Warningf("grpc: failed load balancer address dns lookup due to %v.\n", err)
+			level.Warning(w.logger).Log("msg", "failed load balancer address DNS lookup", "err", err)
 			continue
 		}
 		for _, a := range lbAddrs {
 			a, ok := formatIP(a)
 			if !ok {
-				grpclog.Errorf("grpc: failed IP parsing due to %v.\n", err)
+				level.Error(w.logger).Log("failed IP parsing", "err", err)
 				continue
 			}
 			addr := a + ":" + strconv.Itoa(int(s.Port))
@@ -226,13 +226,13 @@ func (w *dnsWatcher) lookupHost() map[string]*Update {
 	newAddrs := make(map[string]*Update)
 	addrs, err := lookupHost(w.ctx, w.host)
 	if err != nil {
-		grpclog.Warningf("grpc: failed dns A record lookup due to %v.\n", err)
+		level.Warn(w.logger).Log("msg", "failed DNS A record lookup", "err", err)
 		return nil
 	}
 	for _, a := range addrs {
 		a, ok := formatIP(a)
 		if !ok {
-			grpclog.Errorf("grpc: failed IP parsing due to %v.\n", err)
+			level.Error(w.logger).Log("msg", "failed IP parsing", "err", err)
 			continue
 		}
 		addr := a + ":" + w.port
