@@ -8,3 +8,4 @@
 * [ENHANCEMENT] Add middleware package. #38
 * [ENHANCEMENT] Add `dslog` package #33
 * [ENHANCEMENT] Add `tenant` package #33
+* [ENHANCEMENT] Add spanlogger package. #42
