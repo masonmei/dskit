@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/go-kit/kit/log"
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/encoding/gzip"
@@ -23,6 +23,15 @@ type Config struct {
 	GRPCCompression string  `yaml:"grpc_compression"`
 	RateLimit       float64 `yaml:"rate_limit"`
 	RateLimitBurst  int     `yaml:"rate_limit_burst"`
+	// PingTime is the number of seconds after which the client will ping the server in case of inactivity.
+	//
+	// See `google.golang.org/grpc/keepalive.ClientParameters.Time` for reference.
+	PingTime int64 `yaml:"ping_time"`
+	// PingTimeOut is the number of seconds the client waits after pinging the server, and if no activity is seen
+	// after that, the connection is closed.
+	//
+	// See `google.golang.org/grpc/keepalive.ClientParameters.Timeout` for reference.
+	PingTimeout int64 `yaml:"ping_timeout"`
 
 	BackoffOnRatelimits bool           `yaml:"backoff_on_ratelimits"`
 	BackoffConfig       backoff.Config `yaml:"backoff_config"`
@@ -92,11 +101,11 @@ func (cfg *Config) DialOption(unaryClientInterceptors []grpc.UnaryClientIntercep
 	return append(
 		opts,
 		grpc.WithDefaultCallOptions(cfg.CallOptions()...),
-		grpc.WithUnaryInterceptor(grpc_middleware.ChainUnaryClient(unaryClientInterceptors...)),
-		grpc.WithStreamInterceptor(grpc_middleware.ChainStreamClient(streamClientInterceptors...)),
+		grpc.WithUnaryInterceptor(middleware.ChainUnaryClient(unaryClientInterceptors...)),
+		grpc.WithStreamInterceptor(middleware.ChainStreamClient(streamClientInterceptors...)),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                time.Second * 20,
-			Timeout:             time.Second * 10,
+			Time:                time.Duration(cfg.PingTime) * time.Second,
+			Timeout:             time.Duration(cfg.PingTimeout) * time.Second,
 			PermitWithoutStream: true,
 		}),
 	), nil
