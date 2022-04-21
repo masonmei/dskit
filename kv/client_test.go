@@ -2,11 +2,14 @@ package kv
 
 import (
 	"context"
+	"flag"
 	"testing"
 	"time"
 
+	"github.com/go-kit/log"
 	"github.com/gogo/protobuf/proto"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
 
@@ -94,7 +97,6 @@ func Test_createClient_multiBackend_mustContainRoleAndTypeLabels(t *testing.T) {
 	require.Equal(t, "primary", actual["multi"])
 	require.Equal(t, "primary", actual["inmemory"])
 	require.Equal(t, "secondary", actual["mock"])
-
 }
 
 func typeToRoleMapHistogramLabels(t *testing.T, reg prometheus.Gatherer, histogramWithRoleLabels string) map[string]string {
@@ -122,6 +124,7 @@ func typeToRoleMapHistogramLabels(t *testing.T, reg prometheus.Gatherer, histogr
 	}
 	return result
 }
+
 func newConfigsForTest() (cfg StoreConfig, c codec.Codec) {
 	cfg = StoreConfig{
 		Multi: MultiConfig{
@@ -151,9 +154,54 @@ func (m *mockMessage) ProtoMessage() {
 	panic("do not use")
 }
 
-type testLogger struct {
-}
+type testLogger struct{}
 
 func (l testLogger) Log(keyvals ...interface{}) error {
 	return nil
+}
+
+func TestDefaultStoreValue(t *testing.T) {
+	cfg1 := Config{}
+	cfg1.RegisterFlagsWithPrefix("", "", flag.NewFlagSet("test", flag.PanicOnError))
+	assert.Equal(t, "consul", cfg1.Store)
+
+	cfg2 := Config{}
+	cfg2.Store = "memberlist"
+	cfg2.RegisterFlagsWithPrefix("", "", flag.NewFlagSet("test", flag.PanicOnError))
+	assert.Equal(t, "memberlist", cfg2.Store)
+}
+
+type stringCodec struct {
+	value string
+}
+
+func (c stringCodec) Decode([]byte) (interface{}, error) {
+	return c.value, nil
+}
+
+func (c stringCodec) Encode(interface{}) ([]byte, error) {
+	return []byte(c.value), nil
+}
+func (c stringCodec) CodecID() string { return c.value }
+
+func TestMultipleInMemoryClient(t *testing.T) {
+	logger := log.NewNopLogger()
+	foo, err := NewClient(Config{
+		Store: "inmemory",
+	}, stringCodec{value: "foo"}, prometheus.NewRegistry(), logger)
+	require.NoError(t, err)
+	bar, err := NewClient(Config{
+		Store: "inmemory",
+	}, stringCodec{value: "bar"}, prometheus.NewRegistry(), logger)
+	require.NoError(t, err)
+
+	require.NoError(t, foo.CAS(context.TODO(), "foo", func(in interface{}) (out interface{}, retry bool, err error) { return "foo", false, nil }))
+	fooKey, err := foo.Get(ctx, "foo")
+	require.NoError(t, err)
+	require.Equal(t, "foo", fooKey.(string))
+
+	require.NoError(t, bar.CAS(context.TODO(), "bar", func(in interface{}) (out interface{}, retry bool, err error) { return "bar", false, nil }))
+	barKey, err := bar.Get(ctx, "bar")
+	require.NoError(t, err)
+	require.Equal(t, "bar", barKey.(string))
 }
