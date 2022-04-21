@@ -34,6 +34,10 @@ func (s *defaultReplicationStrategy) Filter(instances []InstanceDesc, op Operati
 	}
 
 	minSuccess := (replicationFactor / 2) + 1
+	if replicationFactor == 2 {
+		minSuccess = 1
+	}
+	
 	now := time.Now()
 
 	// Skip those that have not heartbeated in a while. NB these are still
