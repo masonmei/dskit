@@ -21,9 +21,14 @@
 * [CHANGE] grpcclient: Bump default `grpc-max-send-msg-size` flag to 100 Mb. #123
 * [CHANGE] ring/client: It's now possible to set different value than `consul` as default KV store. #120
 * [CHANGE] Lifecycler: Default value of lifecycler's `final-sleep` is now `0s` (i.e. no sleep). #121
-* [CHANGE] Lifecycler: It's now possible to change default value of lifecycler's `final-sleep`. #121
 * [CHANGE] Minor cosmetic changes in ring and memberlist HTTP status templates. #149
 * [CHANGE] flagext.Secret: `value` field is no longer exported. Value can be read using `String()` method and set using `Set` method. #154
+* [CHANGE] spanlogger.SpanLogger: Log the user ID from the context with the `user` label instead of `org_id`. #156
+* [CHANGE] ring: removed the following metrics from ring client and lifecycler: #161
+  * `member_ring_tokens_owned`
+  * `member_ring_tokens_to_own`
+  * `ring_tokens_owned`
+  * `ring_member_ownership_percent`
 * [ENHANCEMENT] Add middleware package. #38
 * [ENHANCEMENT] Add the ring package #45
 * [ENHANCEMENT] Add limiter package. #41
@@ -39,9 +44,13 @@
 * [ENHANCEMENT] Trigger metrics update on ring changes instead of doing it periodically to speed up tests that wait for certain metrics. #107
 * [ENHANCEMENT] Add an HTTP hedging library. #115
 * [ENHANCEMENT] Ring: Add ring page handler to BasicLifecycler and Lifecycler. #112
+* [ENHANCEMENT] Lifecycler: It's now possible to change default value of lifecycler's `final-sleep`. #121
+* [ENHANCEMENT] Memberlist: Update to latest fork of memberlist. #160
+* [ENHANCEMENT] Memberlist: extracted HTTP status page handler to `memberlist.HTTPStatusHandler` which now can be instantiated with a custom template. #163
 * [BUGFIX] spanlogger: Support multiple tenant IDs. #59
 * [BUGFIX] Memberlist: fixed corrupted packets when sending compound messages with more than 255 messages or messages bigger than 64KB. #85
 * [BUGFIX] Ring: `ring_member_ownership_percent` and `ring_tokens_owned` metrics are not updated on scale down. #109
 * [BUGFIX] Allow in-memory kv-client to support multiple codec #132
 * [BUGFIX] Modules: fix a module waiting for other modules depending on it before stopping. #141
 * [BUGFIX] Multi KV: fix panic when using function to modify primary KV store in runtime. #153
+* [BUGFIX] Lifecycler: if the ring backend storage is reset, the instance adds itself back to the ring with an updated registration timestamp set to current time. #165
