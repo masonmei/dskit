@@ -34,6 +34,12 @@
 * [CHANGE] Remove middleware package. #182
 * [CHANGE] Memberlist: disabled TCP-based ping fallback, because dskit already uses a custom transport based on TCP. #194
 * [CHANGE] Memberlist: KV store now fast-joins memberlist cluster before serving any KV requests. #195
+* [CHANGE] Ring: remove duplicate state in NewOp func #203
+* [CHANGE] Memberlist: Increase the leave timeout to 10x the connection timeout, so that we can communicate the leave to at least 1 node, if the first 9 we try to contact times out.
+* [CHANGE] Netutil: removed debug log message "found network interfaces with private IP addresses assigned". #216
+* [CHANGE] Runtimeconfig: Listener channels created by Manager no longer receive current value on every reload period, but only if any configuration file has changed. #218
+* [CHANGE] Services: `FailureWatcher.WatchService()` and `FailureWatcher.WatchManager()` now panic if `FailureWatcher` is `nil`. #219
+* [CHANGE] Memberlist: cluster label verification feature (`-memberlist.cluster-label` and `-memberlist.cluster-label-verification-disabled`) is now marked as stable. #222
 * [ENHANCEMENT] Add middleware package. #38
 * [ENHANCEMENT] Add the ring package #45
 * [ENHANCEMENT] Add limiter package. #41
@@ -58,6 +64,11 @@
 * [ENHANCEMENT] ring: optimize shuffle-shard computation when lookback is used, and all instances have registered timestamp within the lookback window. In that case we can immediately return origial ring, because we would select all instances anyway. #181
 * [ENHANCEMENT] Runtimeconfig: Allow providing multiple runtime config yaml files as comma separated list file paths. #183
 * [ENHANCEMENT] Memberlist: Add cluster label support to memberlist client. #187
+* [ENHANCEMENT] Runtimeconfig: Don't unmarshal and merge runtime config yaml files if they haven't changed since last check. #218
+* [ENHANCEMENT] ring: DoBatch now differentiates between 4xx and 5xx GRPC errors and keeps track of them separately. It only returns when there is a quorum of either error class. If your errors do not implement `GRPCStatus() *Status` from google.golang.org/grpc/status, then this change does not affect you. #201
+* [ENHANCEMENT] Added `<prefix>.tls-min-version` and `<prefix>.tls-cipher-suites` flags to client configurations. #217
+* [ENHANCEMENT] Concurrency: Add LimitedConcurrencySingleFlight to run jobs concurrently and with in-flight deduplication. #214
+* [ENHANCEMENT] Add the ability to define custom gRPC health checks. #227
 * [BUGFIX] spanlogger: Support multiple tenant IDs. #59
 * [BUGFIX] Memberlist: fixed corrupted packets when sending compound messages with more than 255 messages or messages bigger than 64KB. #85
 * [BUGFIX] Ring: `ring_member_ownership_percent` and `ring_tokens_owned` metrics are not updated on scale down. #109
@@ -67,3 +78,5 @@
 * [BUGFIX] Lifecycler: if the ring backend storage is reset, the instance adds itself back to the ring with an updated registration timestamp set to current time. #165
 * [BUGFIX] Ring: fix bug where hash ring instances may appear unhealthy in the web UI even though they are not. #172
 * [BUGFIX] Lifecycler: if existing ring entry is reused, ring is updated immediately, and not on next heartbeat. #175
+* [BUGFIX] stringslicecsv: handle unmarshalling empty yaml string #206
+* [BUGFIX] Memberlist: retry joining memberlist cluster on startup when no nodes are resolved. #215
