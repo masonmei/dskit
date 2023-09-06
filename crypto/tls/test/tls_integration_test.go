@@ -11,20 +11,21 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/gogo/status"
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/weaveworks/common/server"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
+
+	"github.com/grafana/dskit/server"
 
 	"github.com/grafana/dskit/backoff"
 	"github.com/grafana/dskit/crypto/tls"
@@ -205,6 +206,11 @@ func TestServerWithLocalhostCertNoClientCertAuth(t *testing.T) {
 	(&cfg).RegisterFlags(flag.NewFlagSet("fake", flag.ContinueOnError))
 
 	unavailableDescErr := errorContainsString("rpc error: code = Unavailable desc =")
+	notTrustedErr := errorContainsString("x509: certificate signed by unknown authority")
+
+	if runtime.GOOS == "darwin" {
+		notTrustedErr = errorContainsString("x509: “server” certificate is not trusted")
+	}
 
 	cfg.HTTPTLSConfig.TLSCertPath = certs.serverCertFile
 	cfg.HTTPTLSConfig.TLSKeyPath = certs.serverKeyFile
@@ -219,7 +225,7 @@ func TestServerWithLocalhostCertNoClientCertAuth(t *testing.T) {
 			{
 				name:            "no-config",
 				tlsConfig:       tls.ClientConfig{},
-				httpExpectError: errorContainsString("x509: certificate signed by unknown authority"),
+				httpExpectError: notTrustedErr,
 				// For GRPC we expect this error as we try to connect without TLS to a TLS enabled server
 				grpcExpectError: unavailableDescErr,
 			},
@@ -227,8 +233,8 @@ func TestServerWithLocalhostCertNoClientCertAuth(t *testing.T) {
 				name:            "grpc-tls-enabled",
 				tlsGrpcEnabled:  true,
 				tlsConfig:       tls.ClientConfig{},
-				httpExpectError: errorContainsString("x509: certificate signed by unknown authority"),
-				grpcExpectError: errorContainsString("x509: certificate signed by unknown authority"),
+				httpExpectError: notTrustedErr,
+				grpcExpectError: notTrustedErr,
 			},
 			{
 				name:           "tls-skip-verify",
@@ -271,6 +277,11 @@ func TestServerWithoutLocalhostCertNoClientCertAuth(t *testing.T) {
 	(&cfg).RegisterFlags(flag.NewFlagSet("fake", flag.ContinueOnError))
 
 	unavailableDescErr := errorContainsString("rpc error: code = Unavailable desc =")
+	invalidCertErr := errorContainsString("x509: certificate is valid for my-other-name, not localhost")
+
+	if runtime.GOOS == "darwin" {
+		invalidCertErr = errorContainsString("x509: “server-no-localhost” certificate is not trusted")
+	}
 
 	// Test a TLS server without localhost cert without any client certificate enforcement
 	cfg.HTTPTLSConfig.TLSCertPath = certs.serverNoLocalhostCertFile
@@ -284,7 +295,7 @@ func TestServerWithoutLocalhostCertNoClientCertAuth(t *testing.T) {
 			{
 				name:            "no-config",
 				tlsConfig:       tls.ClientConfig{},
-				httpExpectError: errorContainsString("x509: certificate is valid for my-other-name, not localhost"),
+				httpExpectError: invalidCertErr,
 				// For GRPC we expect this error as we try to connect without TLS to a TLS enabled server
 				grpcExpectError: unavailableDescErr,
 			},
@@ -292,8 +303,8 @@ func TestServerWithoutLocalhostCertNoClientCertAuth(t *testing.T) {
 				name:            "grpc-tls-enabled",
 				tlsGrpcEnabled:  true,
 				tlsConfig:       tls.ClientConfig{},
-				httpExpectError: errorContainsString("x509: certificate is valid for my-other-name, not localhost"),
-				grpcExpectError: errorContainsString("x509: certificate is valid for my-other-name, not localhost"),
+				httpExpectError: invalidCertErr,
+				grpcExpectError: invalidCertErr,
 			},
 			{
 				name:           "ca-path",
@@ -344,7 +355,7 @@ func TestTLSServerWithLocalhostCertWithClientCertificateEnforcementUsingClientCA
 	// TODO: Investigate why we don't really receive the error about the
 	// bad certificate from the server side and just see connection
 	// closed/reset instead
-	badCertErr := errorContainsString("remote error: tls: bad certificate")
+	badCertErr := errorContainsString(badCertificateErrorMessage)
 	newIntegrationClientServer(
 		t,
 		cfg,
@@ -628,8 +639,7 @@ func (cfg *grpcConfig) DialOption() ([]grpc.DialOption, error) {
 	return append(
 		opts,
 		grpc.WithDefaultCallOptions(cfg.CallOptions()...),
-		grpc.WithUnaryInterceptor(grpc_middleware.ChainUnaryClient(unaryClientInterceptors...)),
-		grpc.WithStreamInterceptor(grpc_middleware.ChainStreamClient()),
+		grpc.WithChainUnaryInterceptor(unaryClientInterceptors...),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                time.Second * 20,
 			Timeout:             time.Second * 10,

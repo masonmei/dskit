@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-kit/log"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -352,6 +353,8 @@ func TestCASErrorWithRetries(t *testing.T) {
 }
 
 func TestCASNoChange(t *testing.T) {
+	t.Parallel()
+
 	withFixtures(t, func(t *testing.T, kv *Client) {
 		err := cas(kv, key, func(in *data) (*data, bool, error) {
 			if in == nil {
@@ -446,6 +449,8 @@ func TestCASFailedBecauseOfVersionChanges(t *testing.T) {
 }
 
 func TestMultipleCAS(t *testing.T) {
+	t.Parallel()
+
 	c := dataCodec{}
 
 	var cfg KVConfig
@@ -546,6 +551,8 @@ func defaultKVConfig(i int) KVConfig {
 }
 
 func TestMultipleClients(t *testing.T) {
+	t.Parallel()
+
 	members := 10
 
 	err := testMultipleClientsWithConfigGenerator(t, members, defaultKVConfig)
@@ -553,6 +560,8 @@ func TestMultipleClients(t *testing.T) {
 }
 
 func TestMultipleClientsWithMixedLabelsAndExpectFailure(t *testing.T) {
+	t.Parallel()
+
 	// We want 3 members, they will be configured with the following labels:
 	// 1) ""
 	// 2) "label1"
@@ -580,6 +589,8 @@ func TestMultipleClientsWithMixedLabelsAndExpectFailure(t *testing.T) {
 }
 
 func TestMultipleClientsWithMixedLabelsAndClusterLabelVerificationDisabled(t *testing.T) {
+	t.Parallel()
+
 	// We want 3 members, all will have the cluster label verification disabled.
 	// They will be configured with mixed labels, and some without any labels.
 	//
@@ -605,6 +616,8 @@ func TestMultipleClientsWithMixedLabelsAndClusterLabelVerificationDisabled(t *te
 }
 
 func TestMultipleClientsWithSameLabelWithClusterLabelVerification(t *testing.T) {
+	t.Parallel()
+
 	members := 10
 	label := "myTestLabel"
 
@@ -758,6 +771,7 @@ func testMultipleClientsWithConfigGenerator(t *testing.T, members int, configGen
 }
 
 func TestJoinMembersWithRetryBackoff(t *testing.T) {
+
 	c := dataCodec{}
 
 	const members = 3
@@ -786,7 +800,11 @@ func TestJoinMembersWithRetryBackoff(t *testing.T) {
 	}
 
 	for testName, testData := range tests {
+		testData := testData
+
 		t.Run(testName, func(t *testing.T) {
+			t.Parallel()
+
 			var clients []*Client
 
 			stop := make(chan struct{})
@@ -1007,7 +1025,7 @@ func generateTokens(numTokens int) []uint32 {
 
 type distributedCounter map[string]int
 
-func (dc distributedCounter) Merge(mergeable Mergeable, localCAS bool) (Mergeable, error) {
+func (dc distributedCounter) Merge(mergeable Mergeable, _ bool) (Mergeable, error) {
 	if mergeable == nil {
 		return nil, nil
 	}
@@ -1041,7 +1059,7 @@ func (dc distributedCounter) MergeContent() []string {
 	return out
 }
 
-func (dc distributedCounter) RemoveTombstones(limit time.Time) (_, _ int) {
+func (dc distributedCounter) RemoveTombstones(_ time.Time) (_, _ int) {
 	// nothing to do
 	return
 }
@@ -1435,6 +1453,72 @@ func TestFastJoin(t *testing.T) {
 	require.Equal(t, JOINING, val.(*data).Members[memberKey].State)
 }
 
+func TestDelegateMethodsDontCrashBeforeKVStarts(t *testing.T) {
+	codec := dataCodec{}
+
+	cfg := KVConfig{}
+	cfg.Codecs = append(cfg.Codecs, codec)
+
+	kv := NewKV(cfg, log.NewNopLogger(), &dnsProviderMock{}, prometheus.NewPedanticRegistry())
+
+	// Make sure we can call delegate methods on unstarted service, and they don't crash nor block.
+	kv.LocalState(true)
+	kv.MergeRemoteState(nil, true)
+	kv.GetBroadcasts(100, 100)
+
+	now := time.Now()
+	msg := &data{
+		Members: map[string]member{
+			"a": {Timestamp: now.Unix() - 5, State: ACTIVE, Tokens: []uint32{}},
+			"b": {Timestamp: now.Unix() + 5, State: ACTIVE, Tokens: []uint32{1, 2, 3}},
+			"c": {Timestamp: now.Unix(), State: ACTIVE, Tokens: []uint32{}},
+		}}
+
+	kv.NotifyMsg(marshalKeyValuePair(t, key, codec, msg))
+
+	// Verify that message was not added to KV.
+	time.Sleep(time.Millisecond * 100)
+	val, err := kv.Get(key, codec)
+	require.NoError(t, err)
+	require.Nil(t, val)
+
+	// Now start the service, and try NotifyMsg again
+	require.NoError(t, services.StartAndAwaitRunning(context.Background(), kv))
+	defer services.StopAndAwaitTerminated(context.Background(), kv) //nolint:errcheck
+
+	kv.NotifyMsg(marshalKeyValuePair(t, key, codec, msg))
+
+	// Wait until processing finished, and check the message again.
+	time.Sleep(time.Millisecond * 100)
+
+	val, err = kv.Get(key, codec)
+	require.NoError(t, err)
+	assert.Equal(t, msg, val)
+}
+
+func TestMetricsRegistration(t *testing.T) {
+	c := dataCodec{}
+
+	cfg := KVConfig{}
+	cfg.Codecs = append(cfg.Codecs, c)
+
+	reg := prometheus.NewPedanticRegistry()
+	kv := NewKV(cfg, log.NewNopLogger(), &dnsProviderMock{}, reg)
+	err := kv.CAS(context.Background(), "test", c, func(in interface{}) (out interface{}, retry bool, err error) {
+		return &data{Members: map[string]member{
+			"member": {},
+		}}, true, nil
+	})
+	require.NoError(t, err)
+
+	assert.NoError(t, testutil.GatherAndCompare(reg, strings.NewReader(`
+			# HELP memberlist_client_kv_store_count Number of values in KV Store
+			# TYPE memberlist_client_kv_store_count gauge
+			memberlist_client_kv_store_count 1
+	`), "memberlist_client_kv_store_count"))
+
+}
+
 func decodeDataFromMarshalledKeyValuePair(t *testing.T, marshalledKVP []byte, key string, codec dataCodec) *data {
 	kvp := KeyValuePair{}
 	require.NoError(t, kvp.Unmarshal(marshalledKVP))
@@ -1490,7 +1574,7 @@ func poll(t testing.TB, d time.Duration, want interface{}, have func() interface
 type testLogger struct {
 }
 
-func (l testLogger) Log(keyvals ...interface{}) error {
+func (l testLogger) Log(_ ...interface{}) error {
 	return nil
 }
 
@@ -1498,7 +1582,7 @@ type dnsProviderMock struct {
 	resolved []string
 }
 
-func (p *dnsProviderMock) Resolve(ctx context.Context, addrs []string) error {
+func (p *dnsProviderMock) Resolve(_ context.Context, addrs []string) error {
 	p.resolved = addrs
 	return nil
 }
@@ -1512,7 +1596,7 @@ type delayedDNSProviderMock struct {
 	delay    int
 }
 
-func (p *delayedDNSProviderMock) Resolve(ctx context.Context, addrs []string) error {
+func (p *delayedDNSProviderMock) Resolve(_ context.Context, addrs []string) error {
 	if p.delay == 0 {
 		p.resolved = make([]string, len(addrs))
 		for _, addr := range addrs {
